@@ -17,6 +17,8 @@
 #define RXD2 16
 #define TXD2 17
 
+#define SSR_PIN 13  // <--- NEW: Connect the SSR (+) Control pin here
+
 // --- Configuration ---
 String recipientNumber = "+639XXXXXXXXX"; 
 float dangerThreshold = 3.5;              
@@ -51,6 +53,10 @@ void setup() {
 
   pinMode(TFT_LED, OUTPUT);
   digitalWrite(TFT_LED, HIGH);
+  
+  // --- NEW: SSR Setup ---
+  pinMode(SSR_PIN, OUTPUT);
+  digitalWrite(SSR_PIN, LOW); // Ensure alarm is OFF at startup
 
   pinMode(BTN_GRAPH, INPUT_PULLUP);
   pinMode(BTN_TXT,   INPUT_PULLUP);
@@ -127,7 +133,7 @@ void checkNavigation() {
 
   if (currentState == HOME) {
     if (btnGraph) { currentState = GRAPH_MODE; setupGraphUI(); delay(300); }
-    else if (btnTxt) { triggerManualSMS(); } // This now handles its own delays and redraws
+    else if (btnTxt) { triggerManualSMS(); } 
     else if (btnMnl) { triggerManualAlarm(); }
   }
 }
@@ -158,15 +164,20 @@ void runSeismicLogic() {
         }
       }
       
-      if (peakMag > dangerThreshold && !smsSentForCurrentEvent) {
-        startSMSSending(peakMag);
-        smsSentForCurrentEvent = true; 
+      // AUTO ALARM LOGIC: Turn on bell if intensity is dangerous
+      if (peakMag > dangerThreshold) {
+        digitalWrite(SSR_PIN, HIGH); // Bell ON
+        if (!smsSentForCurrentEvent) {
+          startSMSSending(peakMag);
+          smsSentForCurrentEvent = true; 
+        }
       }
     }
   } 
 
   if (isVibrating && (now - lastShakeTime > exitCooldown)) {
     isVibrating = false;
+    digitalWrite(SSR_PIN, LOW); // Bell OFF when shaking stops
     smsSentForCurrentEvent = false; 
     lastDuration = (lastShakeTime - startTime) / 1000.0;
     eventEndTime = now;
@@ -192,7 +203,7 @@ void drawGraphElements(float vibration) {
         tft.setTextColor(ILI9341_ORANGE, ILI9341_BLACK); tft.print("EARTHQUAKE HAS OCCURRED    ");
       } else { showingPostEvent = false; isConfirmedEarthquake = false; }
     } else {
-      tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK); tft.print("STABLE / MONITORING...      ");
+      tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK); tft.print("STABLE / MONITORING...       ");
     }
 
     tft.setCursor(240, 12);
@@ -213,25 +224,14 @@ void drawGraphElements(float vibration) {
 
 void startSMSSending(float mag) {
   currentSmsStatus = ALERTING;
-  
-  // Set SMS to Text Mode
   Serial2.println("AT+CMGF=1"); 
   delay(100); 
-
-  // Specify Recipient
   Serial2.println("AT+CMGS=\"" + recipientNumber + "\""); 
   delay(100); 
-
-  // The Message Body
   Serial2.print("EARTHQUAKE ALERT!\n");
   Serial2.print("Intensity: "); Serial2.print(mag, 2); Serial2.println(" m/s2");
   Serial2.print("Status: SHAKING DETECTED\n");
-  Serial2.print("Precautions:\n");
-  Serial2.print("- DUCK, COVER, & HOLD\n");
-  Serial2.print("- Stay away from glass/mirrors\n");
-  Serial2.print("- Watch for falling objects\n");
   Serial2.print("Stay safe!");
-
   Serial2.write(26); 
 }
 
@@ -251,9 +251,7 @@ void drawButtonLabel(int y, String text, uint16_t color) {
 }
 
 void setupGraphUI() {
-  // BUG FIX: Reset SMS status flags when entering Graph mode so "Alerting" doesn't ghost in
   currentSmsStatus = IDLE; 
-  
   tft.fillScreen(ILI9341_BLACK);
   tft.drawRect(0, 0, 320, 240, ILI9341_WHITE);
   tft.setCursor(10, 12); tft.setTextColor(ILI9341_CYAN); tft.setTextSize(2);
@@ -275,19 +273,15 @@ void updateMetrics() {
 }
 
 void triggerManualSMS() {
-  // UI change to match button 3 (Red alert style)
   tft.fillScreen(ILI9341_BLUE);
   tft.drawRect(10, 10, 300, 220, ILI9341_WHITE);
   tft.setCursor(45, 80); tft.setTextColor(ILI9341_WHITE); tft.setTextSize(3);
   tft.println("SENDING ALERTS!");
-  
-  // Actually send the SMS
   Serial2.println("AT+CMGF=1"); delay(100);
   Serial2.println("AT+CMGS=\"" + recipientNumber + "\""); delay(100);
   Serial2.print("EARTHQUAKE MONITOR: Manual Test OK.");
   Serial2.write(26); 
-  
-  delay(3000); // Give user time to see the red screen
+  delay(3000); 
   drawHomeScreen();
 }
 
@@ -296,6 +290,10 @@ void triggerManualAlarm() {
   tft.drawRect(10, 10, 300, 220, ILI9341_WHITE);
   tft.setCursor(45, 60); tft.setTextColor(ILI9341_WHITE); tft.setTextSize(3);
   tft.println(" EMERGENCY!");
+  
+  digitalWrite(SSR_PIN, HIGH); // BELL ON
   delay(5000); 
+  digitalWrite(SSR_PIN, LOW);  // BELL OFF
+  
   drawHomeScreen();
 }
