@@ -28,8 +28,11 @@ State currentState = HOME;
 unsigned long lastActivityTime = 0;
 bool screenIsOn = true;
 bool smsSentForCurrentEvent = false;
-unsigned long alertDisplayStartTime = 0;
-bool isShowingAlertStatus = false;
+
+// --- SMS Status Variables ---
+enum SMSStatus { IDLE, ALERTING, SENT };
+SMSStatus currentSmsStatus = IDLE;
+unsigned long statusTimer = 0;
 
 Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC, TFT_RST);
 Adafruit_ADXL345_Unified accel = Adafruit_ADXL345_Unified(12345);
@@ -67,7 +70,7 @@ void loop() {
   manageSleep();
   checkNavigation();
   runSeismicLogic(); 
-  handleAlertTimeout(); 
+  updateSMSStatus(); 
 }
 
 void wakeScreen() {
@@ -81,29 +84,36 @@ void wakeScreen() {
 }
 
 void manageSleep() {
-  // Only sleep if the screen is on, the timer has passed, and NO vibration is happening
   if (screenIsOn && (millis() - lastActivityTime > screenTimeout) && !isVibrating) {
     digitalWrite(TFT_LED, LOW);
     screenIsOn = false;
   }
 }
 
-void handleAlertTimeout() {
-  // Clear the corner "ALERTING..." text after 4 seconds
-  if (isShowingAlertStatus && (millis() - alertDisplayStartTime > 4000)) {
-    isShowingAlertStatus = false;
-    if (currentState == GRAPH_MODE) {
-      // Clear just the corner where the text was (Top Right)
-      tft.fillRect(200, 5, 110, 20, ILI9341_BLACK); 
+void updateSMSStatus() {
+  if (Serial2.available()) {
+    String response = Serial2.readString();
+    if (response.indexOf("OK") != -1 || response.indexOf("+CMGS") != -1) {
+      if (currentSmsStatus == ALERTING) {
+        currentSmsStatus = SENT;
+        statusTimer = millis(); 
+      }
     }
+  }
+
+  if (currentSmsStatus == SENT && (millis() - statusTimer > 3000)) {
+    currentSmsStatus = IDLE;
+    if (currentState == GRAPH_MODE) tft.fillRect(240, 5, 75, 20, ILI9341_BLACK); 
   }
 }
 
 void checkNavigation() {
-  bool btnPressed = (digitalRead(BTN_BCK) == LOW || digitalRead(BTN_GRAPH) == LOW || 
-                     digitalRead(BTN_TXT) == LOW || digitalRead(BTN_MNL) == LOW);
+  bool btnGraph = (digitalRead(BTN_GRAPH) == LOW);
+  bool btnTxt   = (digitalRead(BTN_TXT) == LOW);
+  bool btnMnl   = (digitalRead(BTN_MNL) == LOW);
+  bool btnBck   = (digitalRead(BTN_BCK) == LOW);
 
-  if (btnPressed) {
+  if (btnGraph || btnTxt || btnMnl || btnBck) {
     bool wasOff = !screenIsOn;
     wakeScreen();
     if (wasOff) { delay(300); return; } 
@@ -111,13 +121,14 @@ void checkNavigation() {
 
   if (!screenIsOn) return; 
 
-  if (digitalRead(BTN_BCK) == LOW) {
+  if (btnBck) {
     if (currentState != HOME) { currentState = HOME; drawHomeScreen(); delay(300); }
   }
+
   if (currentState == HOME) {
-    if (digitalRead(BTN_GRAPH) == LOW) { currentState = GRAPH_MODE; setupGraphUI(); delay(300); }
-    else if (digitalRead(BTN_TXT) == LOW) triggerManualSMS();
-    else if (digitalRead(BTN_MNL) == LOW) triggerManualAlarm();
+    if (btnGraph) { currentState = GRAPH_MODE; setupGraphUI(); delay(300); }
+    else if (btnTxt) { triggerManualSMS(); } // This now handles its own delays and redraws
+    else if (btnMnl) { triggerManualAlarm(); }
   }
 }
 
@@ -147,9 +158,8 @@ void runSeismicLogic() {
         }
       }
       
-      // IMMEDIATE SMS without full-screen block
       if (peakMag > dangerThreshold && !smsSentForCurrentEvent) {
-        sendImmediateSMS(peakMag);
+        startSMSSending(peakMag);
         smsSentForCurrentEvent = true; 
       }
     }
@@ -167,12 +177,12 @@ void runSeismicLogic() {
   if (screenIsOn && currentState == GRAPH_MODE) {
     drawGraphElements(vibration);
   }
-  delay(15); // Smoother graph refresh
+  delay(15); 
 }
 
 void drawGraphElements(float vibration) {
     tft.setTextSize(1);
-    tft.setCursor(10, 190); // Moved label slightly
+    tft.setCursor(10, 190);
     
     if (isVibrating) {
       tft.setTextColor(isConfirmedEarthquake ? ILI9341_RED : ILI9341_BLUE, ILI9341_BLACK);
@@ -185,12 +195,13 @@ void drawGraphElements(float vibration) {
       tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK); tft.print("STABLE / MONITORING...      ");
     }
 
-    // Small Corner Indicator
-    if (isShowingAlertStatus) {
-      tft.setCursor(220, 12);
+    tft.setCursor(240, 12);
+    if (currentSmsStatus == ALERTING) {
       tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
-      tft.setTextSize(1);
-      tft.print("ALERTING...");
+      tft.print("Alerting...");
+    } else if (currentSmsStatus == SENT) {
+      tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
+      tft.print("Sent!      ");
     }
 
     int yGraph = constrain(map(vibration * 25, 0, 100, 175, 45), 45, 175);
@@ -200,30 +211,38 @@ void drawGraphElements(float vibration) {
     if (xPos >= 310) { xPos = 6; tft.fillRect(6, 41, 308, 138, ILI9341_BLACK); }
 }
 
-void sendImmediateSMS(float mag) {
-  isShowingAlertStatus = true;
-  alertDisplayStartTime = millis();
+void startSMSSending(float mag) {
+  currentSmsStatus = ALERTING;
+  
+  // Set SMS to Text Mode
+  Serial2.println("AT+CMGF=1"); 
+  delay(100); 
 
-  // Non-blocking AT Commands
-  Serial2.println("AT+CMGF=1");
-  delay(10); // Minimal delay for serial buffer
-  Serial2.println("AT+CMGS=\"" + recipientNumber + "\"");
-  delay(10);
-  Serial2.print("EMERGENCY: Earthquake Intensity "); Serial2.print(mag, 2); 
+  // Specify Recipient
+  Serial2.println("AT+CMGS=\"" + recipientNumber + "\""); 
+  delay(100); 
+
+  // The Message Body
+  Serial2.print("EARTHQUAKE ALERT!\n");
+  Serial2.print("Intensity: "); Serial2.print(mag, 2); Serial2.println(" m/s2");
+  Serial2.print("Status: SHAKING DETECTED\n");
+  Serial2.print("Precautions:\n");
+  Serial2.print("- DUCK, COVER, & HOLD\n");
+  Serial2.print("- Stay away from glass/mirrors\n");
+  Serial2.print("- Watch for falling objects\n");
+  Serial2.print("Stay safe!");
+
   Serial2.write(26); 
 }
 
-// UI Functions
 void drawHomeScreen() {
   tft.fillScreen(ILI9341_BLACK);
   tft.drawRect(0, 0, 320, 240, ILI9341_WHITE);
   tft.setCursor(25, 30); tft.setTextColor(ILI9341_CYAN); tft.setTextSize(2);
   tft.print("EARTHQUAKE MONITOR");
   drawButtonLabel(70, "1. VIEW LIVE GRAPH", ILI9341_GREEN);
-  drawButtonLabel(110, "2. SEND TEST ALERT", ILI9341_YELLOW);
-  drawButtonLabel(150, "3. MANUAL EMERGENCY", ILI9341_RED);
-  tft.setTextColor(ILI9341_WHITE); tft.setTextSize(1);
-  tft.setCursor(55, 210); tft.print("Press any button to wake screen");
+  drawButtonLabel(110, "2. SEND TEXT ALERT", ILI9341_YELLOW);
+  drawButtonLabel(150, "3. MANUAL ALERT", ILI9341_RED);
 }
 
 void drawButtonLabel(int y, String text, uint16_t color) {
@@ -232,6 +251,9 @@ void drawButtonLabel(int y, String text, uint16_t color) {
 }
 
 void setupGraphUI() {
+  // BUG FIX: Reset SMS status flags when entering Graph mode so "Alerting" doesn't ghost in
+  currentSmsStatus = IDLE; 
+  
   tft.fillScreen(ILI9341_BLACK);
   tft.drawRect(0, 0, 320, 240, ILI9341_WHITE);
   tft.setCursor(10, 12); tft.setTextColor(ILI9341_CYAN); tft.setTextSize(2);
@@ -253,17 +275,26 @@ void updateMetrics() {
 }
 
 void triggerManualSMS() {
-  wakeScreen();
-  isShowingAlertStatus = true; alertDisplayStartTime = millis();
-  Serial2.println("AT+CMGF=1"); delay(50);
-  Serial2.println("AT+CMGS=\"" + recipientNumber + "\""); delay(50);
+  // UI change to match button 3 (Red alert style)
+  tft.fillScreen(ILI9341_BLUE);
+  tft.drawRect(10, 10, 300, 220, ILI9341_WHITE);
+  tft.setCursor(45, 80); tft.setTextColor(ILI9341_WHITE); tft.setTextSize(3);
+  tft.println("SENDING ALERTS!");
+  
+  // Actually send the SMS
+  Serial2.println("AT+CMGF=1"); delay(100);
+  Serial2.println("AT+CMGS=\"" + recipientNumber + "\""); delay(100);
   Serial2.print("EARTHQUAKE MONITOR: Manual Test OK.");
   Serial2.write(26); 
+  
+  delay(3000); // Give user time to see the red screen
+  drawHomeScreen();
 }
 
 void triggerManualAlarm() {
-  wakeScreen();
-  tft.fillScreen(ILI9341_RED); tft.setCursor(45, 60); tft.setTextColor(ILI9341_WHITE); tft.setTextSize(3);
+  tft.fillScreen(ILI9341_RED);
+  tft.drawRect(10, 10, 300, 220, ILI9341_WHITE);
+  tft.setCursor(45, 60); tft.setTextColor(ILI9341_WHITE); tft.setTextSize(3);
   tft.println(" EMERGENCY!");
   delay(5000); 
   drawHomeScreen();
