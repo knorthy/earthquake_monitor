@@ -1,6 +1,4 @@
-#define BLYNK_TEMPLATE_ID "TMPL64K0cdmL4"
-#define BLYNK_TEMPLATE_NAME "RTEQM"
-#define BLYNK_AUTH_TOKEN "K9eiRJvm4eYH2fEzHWVnqAR9QugnpvS5"
+
 
 #include <WiFi.h>
 #include <WiFiClient.h>
@@ -17,8 +15,6 @@
 WidgetRTC rtc;
 long drillTimeInSeconds = -1;
 
-char ssid[] = "Tiffany_2G";  // pa change na lang sa gagamitin nyong ssid and pass  
-char pass[] = "kniahmaitim"; // note that  dapat same yung entwork nyo na illagay here  saka sa  connection ng blynk sa phone
 
 const char* recipientNumbers[] = {
   "+639123456789", // Person 1
