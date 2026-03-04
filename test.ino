@@ -147,7 +147,8 @@ if (!autoSmsSent) {
         marqueeX = 320;
         marqueeStartTime = millis(); 
         if (WiFi.status() == WL_CONNECTED) {
-          Blynk.logEvent("earthquake_detected", "Earthquake detected! Take cover!");
+          String alertMsg = "EARTHQUAKE DETECTED! Intensity: " + String(peakMag) + " m/s2";
+          Blynk.logEvent("earthquake_detected", alertMsg);
         }
       }
     }
@@ -550,6 +551,9 @@ void loop() {
         
         if (manualAlarmActive) {
            triggerSmsAlert("MANUAL SIREN ACTIVATED! Emergency in progress.");
+
+          if (WiFi.status() == WL_CONNECTED) {
+            Blynk.logEvent("earthquake_detected", "MANUAL ALARM: Emergency siren triggered manually!");
         }
       }
       break;
