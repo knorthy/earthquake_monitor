@@ -11,6 +11,11 @@
 #include <Adafruit_ILI9341.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_ADXL345_U.h>
+#include <TimeLib.h>
+#include <WidgetRTC.h> // for NTP  drill sim to basically hindi na need gumamit ng RTC the drill simulation runs using NTP
+
+WidgetRTC rtc;
+long drillTimeInSeconds = -1;
 
 char ssid[] = "Tiffany_2G";  // pa change na lang sa gagamitin nyong ssid and pass  
 char pass[] = "kniahmaitim"; // note that  dapat same yung entwork nyo na illagay here  saka sa  connection ng blynk sa phone
@@ -501,6 +506,8 @@ void loop() {
     Blynk.run();
   }
 
+  checkDrillTimer();
+
   // 1. CONSTANTLY CHECK SENSOR
   checkSeismicActivity(); 
   updateSmsProcess();
@@ -617,9 +624,39 @@ BLYNK_WRITE(V4) {
   }
 }
 
+BLYNK_WRITE(V5) {
+  TimeInputParam t(param);
+
+  if (t.hasStartTime()) {
+    // Convert the input (e.g., 12:30 PM) into total seconds since sa start ng day
+    drillTimeInSeconds = (t.getStartHour() * 3600) + (t.getStartMinute() * 60);
+    Serial.printf("Drill Scheduled: %02d:%02d\n", t.getStartHour(), t.getStartMinute());
+  } else {
+    drillTimeInSeconds = -1; 
+  }
+}
+
 
 BLYNK_CONNECTED() {
   Blynk.syncVirtual(V3); 
+}
+
+void checkDrillTimer() {
+  if (drillTimeInSeconds != -1 && WiFi.status() == WL_CONNECTED) {
+    long currentTimeInSeconds = (hour() * 3600) + (minute() * 60) + second();
+
+    if (currentTimeInSeconds >= drillTimeInSeconds && currentTimeInSeconds < drillTimeInSeconds + 2) {
+      
+      // TRIGGER ALARMS
+      manualAlarmActive = true;
+      digitalWrite(SSR_PIN, HIGH); 
+      triggerSmsAlert("DRILL SIMULATION STARTED!"); 
+      Blynk.logEvent("earthquake_detected", "Scheduled Drill in Progress."); 
+
+      drillTimeInSeconds = -1; 
+      if (currentScreen == SCREEN_MANUALALARM) updateManualAlarmDisplay();
+    }
+  }
 }
 
 void setup() {
@@ -651,6 +688,9 @@ void setup() {
 
   // This tells Blynk to try and reach the server in the background
   Blynk.connect(); 
+
+  rtc.begin(); 
+  setSyncInterval(10 * 60); 
   
   drawHomeScreen();
 }
