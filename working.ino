@@ -1,3 +1,10 @@
+#define BLYNK_TEMPLATE_ID "TMPL64K0cdmL4"
+#define BLYNK_TEMPLATE_NAME "RTEQM"
+#define BLYNK_AUTH_TOKEN "K9eiRJvm4eYH2fEzHWVnqAR9QugnpvS5"
+
+#include <WiFi.h>
+#include <WiFiClient.h>
+#include <BlynkSimpleEsp32.h> 
 #include <Wire.h>
 #include <SPI.h>
 #include <Adafruit_GFX.h>
@@ -5,7 +12,10 @@
 #include <Adafruit_Sensor.h>
 #include <Adafruit_ADXL345_U.h>
 
-// --- Pin Definitions ---
+char ssid[] = "Tiffany_2G";  // pa change na lang sa gagamitin nyong ssid and pass  
+char pass[] = "kniahmaitim"; // note that  dapat same yung entwork nyo na illagay here  saka sa  connection ng blynk sa phone
+
+// defined pins
 #define TFT_DC    2
 #define TFT_CS    15
 #define TFT_RST   4
@@ -20,22 +30,22 @@
 #define TXD2 17
 #define SSR_PIN 13
 
-// --- Initialize Components ---
+// comp init
 Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC, TFT_RST);
 Adafruit_ADXL345_Unified accel = Adafruit_ADXL345_Unified(12345);
 
-// --- Screen States ---
+// screen stsates
 enum Screen { SCREEN_HOME, SCREEN_GRAPH, SCREEN_SENDTEXT, SCREEN_MANUALALARM };
 Screen currentScreen = SCREEN_HOME;
 
-// --- Button Debounce ---
+// debounce button
 unsigned long lastDebounce_GRAPH = 0;
 unsigned long lastDebounce_TXT   = 0;
 unsigned long lastDebounce_MNL   = 0;
 unsigned long lastDebounce_BCK   = 0;
 const unsigned long DEBOUNCE_MS  = 200;
 
-// --- Graph & Seismic Variables ---
+//  Graph & Seismic Variables
 int xPos = 6;
 int prevY = 110;
 float threshold = 1.8;
@@ -52,11 +62,11 @@ bool isConfirmedEarthquake = false;
 bool showingPostEvent      = false;
 unsigned long eventEndTime = 0;
 
-// --- Manual Alarm State ---
+// Manual Alarm State 
 bool manualAlarmActive = false;
 bool autoSmsSent = false;
 
-// --- Marquee Logic ---
+// Marquee Logic (marquee ks yung moving text)
 bool marqueeActive = false;
 unsigned long marqueeStartTime = 0; 
 const unsigned long MARQUEE_DURATION = 30000; 
@@ -70,10 +80,11 @@ int  alertIndicator      = 0;
 unsigned long alertShownAt = 0;
 const unsigned long ALERT_BADGE_MS = 6000; 
 
-// ============================================================
-//  CORE LOGIC FUNCTIONS (GLOBAL)
-// ============================================================
+// Blynk Timing
+unsigned long lastBlynkStream = 0;
 
+
+//  CORE LOGIC FUNCTIONS (GLOBAL)
 void checkSeismicActivity() {
   sensors_event_t event;
   accel.getEvent(&event);
@@ -82,7 +93,16 @@ void checkSeismicActivity() {
   float vibration = abs(rawMag - 9.81);
   unsigned long now = millis();
 
-  // Reset SMS flag if it's been quiet for a long time (Optional reset logic)
+  // BLYNK Stream live seismograph data to V0 
+  // unfortunately di kaya sa  graph  yung free tier 
+  // if mag babayad kay o access point sa blynk ma uutilize yung widget na for graph
+  // so ang ginawa  ko na lang na alt is gauge
+  // you can change it back  from VO if gusto nyo graph pero  for gauge to be utilize ang  ginamit ko muna ay  V2
+  if (WiFi.status() == WL_CONNECTED && (now - lastBlynkStream > 100)) {
+    Blynk.virtualWrite(V0, vibration);
+    lastBlynkStream = now;
+  }
+
   if (!isVibrating && (now - lastShakeTime > 30000)) {
      autoSmsSent = false; 
   }
@@ -111,10 +131,14 @@ void checkSeismicActivity() {
         alertShownAt = millis();
         if(currentScreen == SCREEN_GRAPH) drawAlertIndicator();
 
-        // TRIGGER MARQUEE REGARDLESS OF SCREEN
         marqueeActive = true;
         marqueeX = 320;
         marqueeStartTime = millis(); 
+        
+        // BLYNK Trigger Event
+        if (WiFi.status() == WL_CONNECTED) {
+          Blynk.logEvent("earthquake_detected", "Earthquake detected! Take cover!");
+        }
       }
     }
   }
@@ -123,16 +147,19 @@ void checkSeismicActivity() {
     isVibrating = false;
     lastDuration = (lastShakeTime - startTime) / 1000.0;
     eventEndTime = now;
+
+    // BLYNK Send Peak (V1) and Duration (V2)
+    if (WiFi.status() == WL_CONNECTED) {
+      Blynk.virtualWrite(V1, peakMag);
+      Blynk.virtualWrite(V2, lastDuration);
+    }
+
     if (isConfirmedEarthquake) {
         showingPostEvent = true;
-        isConfirmedEarthquake = false; // Reset for next detection
+        isConfirmedEarthquake = false; 
     }
     if(currentScreen == SCREEN_GRAPH) updateMetrics();
   }
-  
-  // Save current vibration for the graph to use if needed
-  static float currentVibForGraph;
-  currentVibForGraph = vibration;
 }
 
 void tickMarquee() {
@@ -159,10 +186,7 @@ void tickMarquee() {
   if (marqueeX < -textPixelWidth) marqueeX = 320;
 }
 
-// ============================================================
 //  UI HELPERS
-// ============================================================
-
 bool btnPressed(int pin, unsigned long &lastTime) {
   if (digitalRead(pin) == LOW && millis() - lastTime > DEBOUNCE_MS) {
     lastTime = millis();
@@ -204,10 +228,7 @@ void restoreHomeTitle() {
   tft.print("EARTHQUAKE MONITOR");
 }
 
-// ============================================================
 //  SCREEN DRAWING
-// ============================================================
-
 void drawHomeScreen() {
   tft.fillScreen(ILI9341_BLACK);
   tft.drawRect(0, 0, 320, 240, ILI9341_WHITE);
@@ -256,7 +277,7 @@ void drawGraphScreen() {
   tft.setCursor(10, 8);
   tft.setTextColor(ILI9341_CYAN);
   tft.setTextSize(2);
-  tft.print("CvSU SEISMIC");
+  tft.print("SEISMIC MONITOR");
   tft.drawRect(5, 40, 310, 140, ILI9341_WHITE);
   tft.drawFastHLine(6, 110, 308, 0x2104);
   tft.setTextSize(1);
@@ -335,11 +356,14 @@ void updateMetrics() {
   tft.print(lastDuration, 2); tft.print(" s");
 }
 
-// ============================================================
-//  MAIN LOOP Logic
-// ============================================================
 
+//  MAIN LOOP Logic
 void loop() {
+  // BLYNK Run background tasks only if WiFi is alive
+  if (WiFi.status() == WL_CONNECTED) {
+    Blynk.run();
+  }
+
   // 1. CONSTANTLY CHECK SENSOR
   checkSeismicActivity();
 
@@ -347,7 +371,6 @@ void loop() {
   if (marqueeActive && currentScreen == SCREEN_HOME) {
     tickMarquee();
   } else if (marqueeActive) {
-    // Timeout logic even if not on home screen
     if (millis() - marqueeStartTime > MARQUEE_DURATION) marqueeActive = false;
   }
 
@@ -374,13 +397,11 @@ void loop() {
 
     case SCREEN_GRAPH:
       {
-        // Handle Graph-specific badge timeout
         if (alertIndicator != 0 && (millis() - alertShownAt > ALERT_BADGE_MS)) {
            alertIndicator = 0;
            drawAlertIndicator(); 
         }
 
-        // Handle Graph UI status text
         tft.setTextSize(1);
         tft.setCursor(100, 190);
         if (isVibrating) {
@@ -389,7 +410,6 @@ void loop() {
         } else if (showingPostEvent) { tft.setTextColor(ILI9341_ORANGE, ILI9341_BLACK); tft.print("EARTHQUAKE HAS OCCURRED    "); }
         else { tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK); tft.print("STABLE / MONITORING...     "); }
 
-        // Draw Live Line
         sensors_event_t event; accel.getEvent(&event);
         float vibration = abs(sqrt(sq(event.acceleration.x) + sq(event.acceleration.y) + sq(event.acceleration.z)) - 9.81);
         int yGraph = map(vibration * 25, 0, 100, 110, 45);
@@ -409,7 +429,6 @@ void loop() {
 
     case SCREEN_SENDTEXT:
       if (btnPressed(BTN_TXT, lastDebounce_TXT)) {
-          // Manual SMS trigger logic
           tft.fillRect(15, 90, 290, 60, ILI9341_BLACK);
           tft.drawRoundRect(15, 90, 290, 60, 6, ILI9341_ORANGE);
           tft.setTextColor(ILI9341_ORANGE);
@@ -438,6 +457,8 @@ void loop() {
 
 void setup() {
   Serial.begin(115200);
+  
+  // Hardware FIRST
   Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2);
   pinMode(BTN_GRAPH, INPUT_PULLUP);
   pinMode(BTN_TXT,   INPUT_PULLUP);
@@ -453,5 +474,16 @@ void setup() {
   tft.fillScreen(ILI9341_BLACK);
   if (!accel.begin()) { while (1); }
   accel.setRange(ADXL345_RANGE_2_G);
+  drawHomeScreen();
+
+// 1. Initialize WiFi
+  WiFi.begin(ssid, pass);
+  
+  // 2. Configure Blynk 
+  Blynk.config(BLYNK_AUTH_TOKEN);
+
+  // This tells Blynk to try and reach the server in the background
+  Blynk.connect(); 
+  
   drawHomeScreen();
 }
