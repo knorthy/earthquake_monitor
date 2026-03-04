@@ -460,10 +460,43 @@ void updateMetrics() {
   tft.print(lastDuration, 2); tft.print(" s");
 }
 
+void drawStatusDots() {
+  if (currentScreen == SCREEN_HOME || currentScreen == SCREEN_GRAPH) {
+    int dotX = 280; 
+    int dotY = 15;
+    
+    // Manual Alarm Dot (Red)
+    if (manualAlarmActive) {
+      if ((millis() / 500) % 2 == 0) {
+        tft.fillCircle(dotX, dotY, 5, ILI9341_RED);
+      } else {
+        tft.fillCircle(dotX, dotY, 5, ILI9341_BLACK);
+        tft.drawCircle(dotX, dotY, 5, ILI9341_RED);
+      }
+    } else {
+      tft.fillCircle(dotX, dotY, 5, ILI9341_BLACK); 
+    }
+
+    // SMS Sending Dot (Green)
+    if (isSendingSms) {
+      if ((millis() / 300) % 2 == 0) {
+        tft.fillCircle(dotX + 15, dotY, 5, ILI9341_GREEN);
+      } else {
+        tft.fillCircle(dotX + 15, dotY, 5, ILI9341_BLACK);
+        tft.drawCircle(dotX + 15, dotY, 5, ILI9341_GREEN);
+      }
+    } else {
+      tft.fillCircle(dotX + 15, dotY, 5, ILI9341_BLACK);
+    }
+  }
+}
 
 //  MAIN LOOP Logic
 void loop() {
-  // BLYNK Run background tasks only if WiFi is alive
+
+  drawStatusDots();
+
+  // BLYNK Run background tasks only if may wifi
   if (WiFi.status() == WL_CONNECTED) {
     Blynk.run();
   }
@@ -554,10 +587,39 @@ void loop() {
 
           if (WiFi.status() == WL_CONNECTED) {
             Blynk.logEvent("earthquake_detected", "MANUAL ALARM: Emergency siren triggered manually!");
+          }
         }
       }
       break;
   }
+}
+
+BLYNK_WRITE(V3) {
+  int value = param.asInt(); // 1 = On, 0 = Off
+  
+  if (value == 1) {
+    manualAlarmActive = true;
+    digitalWrite(SSR_PIN, HIGH); // Physical siren ON
+    
+    if (WiFi.status() == WL_CONNECTED) {
+       Blynk.logEvent("earthquake_detected", "MANUAL ALARM: Activated from Phone!");
+    }
+  } else {
+    manualAlarmActive = false;
+    digitalWrite(SSR_PIN, LOW); // Physical siren OFF
+  }
+}
+
+// Remote SMS Trigger via V4
+BLYNK_WRITE(V4) {
+  if (param.asInt() == 1) {
+    triggerSmsAlert("REMOTE SMS ALERT! Triggered from Blynk Mobile.");
+  }
+}
+
+
+BLYNK_CONNECTED() {
+  Blynk.syncVirtual(V3); 
 }
 
 void setup() {
