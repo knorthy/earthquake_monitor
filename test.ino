@@ -23,6 +23,12 @@ const char* recipientNumbers[] = {
 
 const int totalRecipients = sizeof(recipientNumbers) / sizeof(recipientNumbers[0]);
 
+bool isSendingSms = false;
+int currentRecipientIndex = 0;
+unsigned long lastSmsStepTime = 0;
+int smsStep = 0; 
+String currentSmsMessage = "";
+
 // defined pins
 #define TFT_DC    2
 #define TFT_CS    15
@@ -128,31 +134,13 @@ void checkSeismicActivity() {
     if (!isConfirmedEarthquake && (now - startTime > minDuration)) {
       isConfirmedEarthquake = true;
 if (!autoSmsSent) {
-        bool smsDelivered = false;
-        int retryCount = 0;
-        int maxRetries = 3;
+    alertIndicator = 1; // Shows alerting...
+    if(currentScreen == SCREEN_GRAPH) drawAlertIndicator();
 
-        // Loop until sent OR we run out of retries
-        while (!smsDelivered && retryCount < maxRetries) {
-          alertIndicator = 1; // Shows alerting...
-          if(currentScreen == SCREEN_GRAPH) drawAlertIndicator();
-
-      
-          smsDelivered = sendSmsToAll("EARTHQUAKE ALERT! Seismic activity detected.");
-
-          if (smsDelivered) {
-            alertIndicator = 2; // Shows sent
-            autoSmsSent = true;
-          } else {
-            alertIndicator = 3; // Shows error message
-            if(currentScreen == SCREEN_GRAPH) drawAlertIndicator();
-            retryCount++;
-            if(retryCount < maxRetries) delay(3000); // Wait before trying again
-          }
-        }
-        
-        alertShownAt = millis();
-        if(currentScreen == SCREEN_GRAPH) drawAlertIndicator();
+    triggerSmsAlert("EARTHQUAKE ALERT! Seismic activity detected."); // START SENDING
+    
+    autoSmsSent = true;
+    alertShownAt = millis();
 
         // Marquee and Blynk triggers
         marqueeActive = true;
@@ -217,49 +205,95 @@ bool btnPressed(int pin, unsigned long &lastTime) {
   return false;
 }
 
-bool sendSmsToAll(String message) {
-  bool allPersonSuccess = true;
-  for (int i = 0; i < totalRecipients; i++) {
-    Serial2.println("AT+CMGF=1"); delay(200);
-    Serial2.print("AT+CMGS=\"");
-    Serial2.print(recipientNumbers[i]);
-    Serial2.println("\""); delay(200);
-    Serial2.print(message); delay(200);
-    Serial2.write(26); // Send CTRL+Z
-
-    // listens 
-    unsigned long startWait = millis();
-    bool personOk = false;
-    while (millis() - startWait < 5000) { // Wait 5 seconds for response
-      if (Serial2.available()) {
-        String res = Serial2.readString();
-        if (res.indexOf("+CMGS:") != -1) { personOk = true; break; }
-        if (res.indexOf("ERROR") != -1) { personOk = false; break; }
-      }
-    }
-    if (!personOk) allPersonSuccess = false;
-    delay(1000);
+void triggerSmsAlert(String message) {
+  if (!isSendingSms) {
+    isSendingSms = true;
+    currentRecipientIndex = 0;
+    smsStep = 0;
+    currentSmsMessage = message;
+    Serial.println("Background SMS Started...");
   }
-  return allPersonSuccess; // This tells the "Retry" loop if it worked
+}
+
+void updateSmsProcess() {
+  if (!isSendingSms) return;
+  unsigned long now = millis();
+
+  switch (smsStep) {
+    case 0: // Initialize
+      Serial2.println("AT+CMGF=1");
+      lastSmsStepTime = now;
+      smsStep = 1;
+      break;
+
+    case 1: // Set Recipient
+      if (now - lastSmsStepTime >= 300) {
+        Serial2.print("AT+CMGS=\"");
+        Serial2.print(recipientNumbers[currentRecipientIndex]);
+        Serial2.println("\"");
+        lastSmsStepTime = now;
+        smsStep = 2;
+      }
+      break;
+
+    case 2: // Send Content
+      if (now - lastSmsStepTime >= 300) {
+        Serial2.print(currentSmsMessage);
+        Serial2.write(26); 
+        lastSmsStepTime = now;
+        smsStep = 3; // Move to LISTENING mode
+      }
+      break;
+
+    case 3: // LISTENING MODE 
+      if (Serial2.available()) {
+        String response = Serial2.readString();
+        if (response.indexOf("+CMGS:") != -1) {
+          // Success! Move to next step
+          lastSmsStepTime = now;
+          smsStep = 4;
+        } else if (response.indexOf("ERROR") != -1) {
+          // Failure! Mark as error and move to next step
+          alertIndicator = 3; 
+          if(currentScreen == SCREEN_GRAPH) drawAlertIndicator();
+          lastSmsStepTime = now;
+          smsStep = 4;
+        }
+      }
+      // Safety Timeout if no response for 10 seconds, assume failed
+      if (now - lastSmsStepTime > 10000) {
+        alertIndicator = 3;
+        smsStep = 4;
+      }
+      break;
+
+    case 4: // Cooldown and Next Person
+      if (now - lastSmsStepTime >= 1500) {
+        currentRecipientIndex++;
+        if (currentRecipientIndex >= totalRecipients) {
+          isSendingSms = false;
+          if (alertIndicator != 3) alertIndicator = 2; 
+          alertShownAt = millis();
+          if(currentScreen == SCREEN_GRAPH) drawAlertIndicator();
+        } else {
+          smsStep = 0; // Next person
+        }
+      }
+      break;
+  }
 }
 
 void drawAlertIndicator() {
   tft.fillRect(220, 8, 94, 14, ILI9341_BLACK);
   if (alertIndicator == 1) {
-    tft.setTextSize(1);
-    tft.setTextColor(ILI9341_ORANGE);
-    tft.setCursor(220, 8);
-    tft.print("alerting...");
+    tft.setTextSize(1); tft.setTextColor(ILI9341_ORANGE);
+    tft.setCursor(220, 8); tft.print("alerting...");
   } else if (alertIndicator == 2) {
-    tft.setTextSize(1);
-    tft.setTextColor(ILI9341_GREEN);
-    tft.setCursor(238, 8);
-    tft.print("sent");
-  } else if (alertIndicator == 3) { // state inwhich nakikinig yungg system sa response ni sim800l
-    tft.setTextSize(1);
-    tft.setTextColor(ILI9341_RED);
-    tft.setCursor(220, 8);
-    tft.print("retry error!");
+    tft.setTextSize(1); tft.setTextColor(ILI9341_GREEN);
+    tft.setCursor(238, 8); tft.print("sent");
+  } else if (alertIndicator == 3) {
+    tft.setTextSize(1); tft.setTextColor(ILI9341_RED);
+    tft.setCursor(220, 8); tft.print("failed!");
   }
 }
 
@@ -362,30 +396,56 @@ void drawSendTextScreen() {
 void drawManualAlarmScreen() {
   tft.fillScreen(ILI9341_BLACK);
   tft.drawRect(0, 0, 320, 240, ILI9341_WHITE);
+  
+  // Header
   tft.setTextColor(ILI9341_RED);
   tft.setTextSize(2);
-  tft.setCursor(55, 12);
+  tft.setCursor(85, 12);
   tft.print("MANUAL ALARM");
   tft.drawFastHLine(5, 35, 310, ILI9341_WHITE);
+  
+  // Instructions 
+  tft.setTextColor(ILI9341_WHITE);
+  tft.setTextSize(1);
+  tft.setCursor(10, 50); tft.print("Manually triggers the physical siren and sends");
+  tft.setCursor(10, 65); tft.print("an emergency SMS notification to all contacts.");
+  tft.drawFastHLine(5, 80, 310, ILI9341_DARKGREY);
+
+  // This calls the status box logic
   updateManualAlarmDisplay();
+
+  // Footer
+  tft.drawFastHLine(5, 215, 310, ILI9341_DARKGREY);
   tft.setTextColor(ILI9341_DARKGREY);
   tft.setCursor(10, 228);
-  tft.print("[BCK]=HOME  |  [BTN 3]=TOGGLE ALARM");
+  tft.print("[BCK]=HOME  |  [BTN 3]=TOGGLE SIREN");
 }
 
 void updateManualAlarmDisplay() {
-  tft.fillRect(16, 91, 288, 108, ILI9341_BLACK);
+
+  tft.fillRect(15, 90, 290, 110, ILI9341_BLACK);
+  
   if (manualAlarmActive) {
+    
     tft.drawRoundRect(15, 90, 290, 110, 6, ILI9341_RED);
-    tft.fillRect(16, 91, 288, 108, 0x2000);
+    tft.fillRect(20, 95, 280, 100, 0x2000); 
     tft.setTextColor(ILI9341_RED);
     tft.setTextSize(2);
-    tft.setCursor(70, 102); tft.print("!! ALARM ON !!");
+    tft.setCursor(75, 120); tft.print("!! SIREN ON !!");
+    
+    tft.setTextSize(1);
+    tft.setTextColor(ILI9341_WHITE);
+    tft.setCursor(65, 155); tft.print("Press [BTN 3] to DEACTIVATE");
   } else {
+
     tft.drawRoundRect(15, 90, 290, 110, 6, ILI9341_GREEN);
     tft.setTextColor(ILI9341_GREEN);
     tft.setTextSize(2);
-    tft.setCursor(80, 102); tft.print("ALARM OFF");
+    tft.setCursor(100, 120); tft.print("STANDBY");
+    
+    tft.setTextSize(1);
+    tft.setTextColor(ILI9341_WHITE);
+    tft.setCursor(65, 155); tft.print("Press [BTN 3] to ACTIVATE");
   }
 }
 
@@ -408,7 +468,8 @@ void loop() {
   }
 
   // 1. CONSTANTLY CHECK SENSOR
-  checkSeismicActivity();
+  checkSeismicActivity(); 
+  updateSmsProcess();
 
   // 2. TICK MARQUEE IF ON HOME
   if (marqueeActive && currentScreen == SCREEN_HOME) {
@@ -472,63 +533,23 @@ void loop() {
 
     case SCREEN_SENDTEXT:
       if (btnPressed(BTN_TXT, lastDebounce_TXT)) {
-          bool manualSmsDelivered = false;
-          int retries = 0;
-          
-          while (!manualSmsDelivered && retries < 3) {
-            // UI Feedback Sending
-            tft.fillRect(15, 90, 290, 60, ILI9341_BLACK);
-            tft.drawRoundRect(15, 90, 290, 60, 6, ILI9341_ORANGE);
-            tft.setTextColor(ILI9341_ORANGE);
-            tft.setCursor(25, 100); tft.print("STATUS: SENDING...");
-            if(retries > 0) { tft.print(" (TRY "); tft.print(retries + 1); tft.print(")"); }
+          tft.fillRect(15, 90, 290, 60, ILI9341_BLACK);
+          tft.drawRoundRect(15, 90, 290, 60, 6, ILI9341_ORANGE);
+          tft.setTextColor(ILI9341_ORANGE);
+          tft.setCursor(25, 100); tft.print("STATUS: SENDING...");
 
-            manualSmsDelivered = sendSmsToAll("MANUAL EARTHQUAKE ALERT! Please evacuate."); 
-
-            if (manualSmsDelivered) {
-              tft.fillRect(15, 90, 290, 60, ILI9341_BLACK);
-              tft.drawRoundRect(15, 90, 290, 60, 6, ILI9341_GREEN);
-              tft.setTextColor(ILI9341_GREEN);
-              tft.setCursor(25, 100); tft.print("STATUS: ALL SMS SENT!");
-            } else {
-              tft.fillRect(15, 90, 290, 60, ILI9341_BLACK);
-              tft.drawRoundRect(15, 90, 290, 60, 6, ILI9341_RED);
-              tft.setTextColor(ILI9341_RED);
-              tft.setCursor(25, 100); tft.print("STATUS: SEND ERROR!");
-              retries++;
-              if(retries < 3) delay(2000); 
-            }
-          }
+          triggerSmsAlert("MANUAL EARTHQUAKE ALERT! Please evacuate."); 
       }
       break;
 
     case SCREEN_MANUALALARM:
       if (btnPressed(BTN_MNL, lastDebounce_MNL)) {
         manualAlarmActive = !manualAlarmActive;
-        digitalWrite(SSR_PIN, manualAlarmActive ? HIGH : LOW);
-        updateManualAlarmDisplay();
-
+        digitalWrite(SSR_PIN, manualAlarmActive ? HIGH : LOW); // Physical alarm happens instantly
+        updateManualAlarmDisplay(); // Screen updates instantly
+        
         if (manualAlarmActive) {
-          bool sirenSmsDelivered = false;
-          int sRetries = 0;
-
-          while (!sirenSmsDelivered && sRetries < 3) {
-            alertIndicator = 1; // "alerting..."
-            drawAlertIndicator(); 
-
-            sirenSmsDelivered = sendSmsToAll("MANUAL SIREN ACTIVATED! Emergency in progress.");
-
-            if (sirenSmsDelivered) {
-              alertIndicator = 2; // "sent"
-              drawAlertIndicator();
-            } else {
-              alertIndicator = 3; // "retry error!"
-              drawAlertIndicator();
-              sRetries++;
-              if(sRetries < 3) delay(2000);
-            }
-          }
-          alertShownAt = millis(); // Starts the timer to clear the "sent" text later
+           triggerSmsAlert("MANUAL SIREN ACTIVATED! Emergency in progress.");
         }
       }
       break;
