@@ -56,7 +56,7 @@ An IoT-based seismic monitoring station built with the ESP32. This system detect
 
 ---
 
-## 📚 Libraries Required
+##  Libraries Required
 
 You will need to install the following libraries via the Arduino IDE Library Manager:
 
