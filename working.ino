@@ -1,6 +1,6 @@
-#define BLYNK_TEMPLATE_ID "TMPL64K0cdmL4"
-#define BLYNK_TEMPLATE_NAME "RTEQM"
-#define BLYNK_AUTH_TOKEN "K9eiRJvm4eYH2fEzHWVnqAR9QugnpvS5"
+#define BLYNK_TEMPLATE_ID " "
+#define BLYNK_TEMPLATE_NAME " "
+#define BLYNK_AUTH_TOKEN " " // pls refer  sa documentations  para  sa  access  dito
 
 #include <WiFi.h>
 #include <WiFiClient.h>
@@ -12,8 +12,8 @@
 #include <Adafruit_Sensor.h>
 #include <Adafruit_ADXL345_U.h>
 
-char ssid[] = "Tiffany_2G";  // pa change na lang sa gagamitin nyong ssid and pass  
-char pass[] = "kniahmaitim"; // note that  dapat same yung entwork nyo na illagay here  saka sa  connection ng blynk sa phone
+char ssid[] = " ";  // pa change na lang sa gagamitin nyong ssid and pass  
+char pass[] = " "; // note that  dapat same yung entwork nyo na illagay here  saka sa  connection ng blynk sa phone
 
 // defined pins
 #define TFT_DC    2
