@@ -9,7 +9,6 @@ An IoT-based seismic monitoring station built with the ESP32. This system detect
 
 * **Live Seismic Graph**: Real-time plotting of X, Y, and Z acceleration vectors using an ADXL345 sensor and a 2.8" ILI9341 TFT display.
 * **Automated Emergency Alerts**: Triggers a 220V AC physical siren and sends SMS blasts to multiple contacts concurrently via a SIM800L module.
-* **Non-Blocking Logic**: Custom state-machine programming ensures the UI and sensor readings never freeze, even while the GSM module is processing SMS tasks.
 * **NTP Drill Simulation**: Schedule emergency drills directly from the Blynk mobile app. The ESP32 syncs with global time servers, automatically triggering and stopping the drill without needing a physical RTC module.
 * **Remote IoT Management**: Fully integrated with the Blynk IoT platform for remote monitoring, manual siren overrides, and sensitivity adjustments.
 
