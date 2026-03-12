@@ -1,4 +1,6 @@
-
+#define BLYNK_TEMPLATE_ID "" 
+#define BLYNK_TEMPLATE_NAME ""  
+#define BLYNK_AUTH_TOKEN ""  // pls refer  dun sa api  na nakalagay sa documentations
 
 #include <WiFi.h>
 #include <WiFiClient.h>
@@ -12,9 +14,16 @@
 #include <TimeLib.h>
 #include <WidgetRTC.h> // for NTP  drill sim to basically hindi na need gumamit ng RTC the drill simulation runs using NTP
 
+bool sensorReady = false; 
+
 WidgetRTC rtc;
 long drillTimeInSeconds = -1;
+unsigned long drillStartedAt = 0;
+bool isDrillRunning = false;
+const unsigned long DRILL_DURATION = 30000; 
 
+char ssid[] = "";  // pa change na lang sa gagamitin nyong ssid and pass  
+char pass[] = ""; // note that  dapat same yung entwork nyo na illagay here  saka sa  connection ng blynk sa phone
 
 const char* recipientNumbers[] = {
   "+639123456789", // Person 1
@@ -63,7 +72,7 @@ const unsigned long DEBOUNCE_MS  = 200;
 //  Graph & Seismic Variables
 int xPos = 6;
 int prevY = 110;
-float threshold = 1.8;
+float threshold = 1.8; // threshold or sensitivity  nung sensor  for graph
 unsigned long minDuration    = 1000;
 unsigned long exitCooldown   = 2000;
 unsigned long alertHoldTime  = 5000;
@@ -101,27 +110,29 @@ unsigned long lastBlynkStream = 0;
 
 //  CORE LOGIC FUNCTIONS (GLOBAL)
 void checkSeismicActivity() {
+  // 1. THE GATEKEEPER: If sensor failed in setup, don't run the logic
+  if (!sensorReady) return; 
+
   sensors_event_t event;
   accel.getEvent(&event);
 
+  // Calculate vibration
   float rawMag = sqrt(sq(event.acceleration.x) + sq(event.acceleration.y) + sq(event.acceleration.z));
   float vibration = abs(rawMag - 9.81);
   unsigned long now = millis();
 
-  // BLYNK Stream live seismograph data to V0 
-  // unfortunately di kaya sa  graph  yung free tier 
-  // if mag babayad kay o access point sa blynk ma uutilize yung widget na for graph
-  // so ang ginawa  ko na lang na alt is gauge
-  // you can change it back  from VO if gusto nyo graph pero  for gauge to be utilize ang  ginamit ko muna ay  V2
+  // BLYNK Stream live data
   if (WiFi.status() == WL_CONNECTED && (now - lastBlynkStream > 100)) {
     Blynk.virtualWrite(V0, vibration);
     lastBlynkStream = now;
   }
 
+  // Reset SMS flag after 30s of quiet
   if (!isVibrating && (now - lastShakeTime > 30000)) {
      autoSmsSent = false; 
   }
 
+  // Threshold detection
   if (vibration > threshold) {
     lastShakeTime = now;
     if (!isVibrating) {
@@ -132,18 +143,18 @@ void checkSeismicActivity() {
     }
     if (vibration > peakMag) peakMag = vibration;
 
+    // Confirm Earthquake if vibration lasts longer than minDuration
     if (!isConfirmedEarthquake && (now - startTime > minDuration)) {
       isConfirmedEarthquake = true;
-if (!autoSmsSent) {
-    alertIndicator = 1; // Shows alerting...
-    if(currentScreen == SCREEN_GRAPH) drawAlertIndicator();
+      if (!autoSmsSent) {
+        alertIndicator = 1; 
+        if(currentScreen == SCREEN_GRAPH) drawAlertIndicator();
 
-    triggerSmsAlert("EARTHQUAKE ALERT! Seismic activity detected."); // START SENDING
-    
-    autoSmsSent = true;
-    alertShownAt = millis();
+        triggerSmsAlert("EARTHQUAKE ALERT! Seismic activity detected."); 
+        
+        autoSmsSent = true;
+        alertShownAt = millis();
 
-        // Marquee and Blynk triggers
         marqueeActive = true;
         marqueeX = 320;
         marqueeStartTime = millis(); 
@@ -155,12 +166,12 @@ if (!autoSmsSent) {
     }
   }
 
+  // End of event logic
   if (isVibrating && (now - lastShakeTime > exitCooldown)) {
     isVibrating = false;
     lastDuration = (lastShakeTime - startTime) / 1000.0;
     eventEndTime = now;
 
-    // BLYNK Send Peak (V1) and Duration (V2)
     if (WiFi.status() == WL_CONNECTED) {
       Blynk.virtualWrite(V1, peakMag);
       Blynk.virtualWrite(V2, lastDuration);
@@ -638,18 +649,36 @@ BLYNK_CONNECTED() {
 }
 
 void checkDrillTimer() {
-  if (drillTimeInSeconds != -1 && WiFi.status() == WL_CONNECTED) {
-    long currentTimeInSeconds = (hour() * 3600) + (minute() * 60) + second();
+  if (WiFi.status() != WL_CONNECTED) return;
 
+  long currentTimeInSeconds = (hour() * 3600) + (minute() * 60) + second();
+
+  if (drillTimeInSeconds != -1) {
     if (currentTimeInSeconds >= drillTimeInSeconds && currentTimeInSeconds < drillTimeInSeconds + 2) {
-      
-      // TRIGGER ALARMS
       manualAlarmActive = true;
-      digitalWrite(SSR_PIN, HIGH); 
-      triggerSmsAlert("DRILL SIMULATION STARTED!"); 
-      Blynk.logEvent("earthquake_detected", "Scheduled Drill in Progress."); 
+      digitalWrite(SSR_PIN, HIGH);
+      triggerSmsAlert("DRILL SIMULATION STARTED!");
+      Blynk.logEvent("earthquake_detected", "Scheduled Drill in Progress.");
 
-      drillTimeInSeconds = -1; 
+      drillStartedAt = millis(); 
+      isDrillRunning = true;     
+      drillTimeInSeconds = -1;  
+      
+      if (currentScreen == SCREEN_MANUALALARM) updateManualAlarmDisplay();
+    }
+  }
+
+
+  if (isDrillRunning) {
+    if (millis() - drillStartedAt >= DRILL_DURATION) {
+      manualAlarmActive = false;
+      digitalWrite(SSR_PIN, LOW); // Turn off the physical siren
+      isDrillRunning = false;     
+      
+      Serial.println("Drill simulation finished automatically.");
+      
+      Blynk.virtualWrite(V3, 0);
+      
       if (currentScreen == SCREEN_MANUALALARM) updateManualAlarmDisplay();
     }
   }
@@ -672,7 +701,16 @@ void setup() {
   tft.begin();
   tft.setRotation(1);
   tft.fillScreen(ILI9341_BLACK);
-  if (!accel.begin()) { while (1); }
+ if (!accel.begin()) { 
+    Serial.println("Sensor not found, but continuing...");
+    tft.fillScreen(ILI9341_BLACK);
+    tft.setTextColor(ILI9341_RED);
+    tft.setCursor(20, 100);
+    tft.print("ADXL SENSOR ERROR"); 
+    delay(2000); // Show error for 2 seconds
+} else {
+    sensorReady = true;
+}
   accel.setRange(ADXL345_RANGE_2_G);
   drawHomeScreen();
 
