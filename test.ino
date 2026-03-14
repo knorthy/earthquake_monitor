@@ -146,6 +146,10 @@ void checkSeismicActivity() {
     // Confirm Earthquake if vibration lasts longer than minDuration
     if (!isConfirmedEarthquake && (now - startTime > minDuration)) {
       isConfirmedEarthquake = true;
+
+      manualAlarmActive = true; 
+      digitalWrite(SSR_PIN, HIGH);
+      
       if (!autoSmsSent) {
         alertIndicator = 1; 
         if(currentScreen == SCREEN_GRAPH) drawAlertIndicator();
